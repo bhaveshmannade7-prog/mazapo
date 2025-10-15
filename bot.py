@@ -24,11 +24,9 @@ from rapidfuzz import fuzz
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEB_SERVER_PORT = int(os.environ.get("PORT", 8080))
 ADMIN_IDS = [7263519581] 
-
-# Keys must match the names used in your .env file
 FIREBASE_PROJECT_ID = os.getenv("FIREBASE_PROJECT_ID")
 FIREBASE_CLIENT_EMAIL = os.getenv("FIREBASE_CLIENT_EMAIL") 
-FIREBASE_PRIVATE_KEY_STR = os.getenv("FIREBASE_PRIVATE_KEY") 
+FIREBASE_PRIVATE_KEY = os.getenv("FIREBASE_PRIVATE_KEY") # This holds the full JSON object string
 ALGOLIA_APP_ID = os.getenv("ALGOLIA_APPLICATION_ID")
 ALGOLIA_SEARCH_KEY = os.getenv("ALGOLIA_SEARCH_KEY") 
 ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME", "Media_index")
@@ -39,7 +37,7 @@ LIBRARY_CHANNEL_ID = int(os.getenv("LIBRARY_CHANNEL_ID", -1002970735025))
 JOIN_CHANNEL_USERNAME = os.getenv("JOIN_CHANNEL_USERNAME", "MOVIEMAZASU")
 JOIN_GROUP_USERNAME = os.getenv("JOIN_GROUP_USERNAME", "THEGREATMOVIESL9")
 
-if not BOT_TOKEN or not ALGOLIA_APP_ID or not ALGOLIA_SEARCH_KEY or not FIREBASE_PRIVATE_KEY_STR:
+if not BOT_TOKEN or not ALGOLIA_APP_ID or not ALGOLIA_SEARCH_KEY or not FIREBASE_PRIVATE_KEY:
     print("FATAL: Missing essential environment variables (DB/Token)")
     sys.exit(1)
 
@@ -54,51 +52,36 @@ def initialize_db_and_algolia():
     try:
         print("Attempting to initialize Firebase and Algolia...")
         
-        # --- FIXED FIREBASE KEY HANDLING ---
+        # --- ROBUST FIREBASE KEY HANDLING (Final, Most Aggressive Fix) ---
         key_value = os.getenv("FIREBASE_PRIVATE_KEY")
         
-        if not key_value:
-            raise ValueError("FIREBASE_PRIVATE_KEY environment variable is missing")
+        # 1. Strip external quotes and find the starting '{'
+        clean_key_str = key_value.strip()
+        if clean_key_str.startswith('"') and clean_key_str.endswith('"'):
+            clean_key_str = clean_key_str[1:-1].strip()
         
-        # Remove any surrounding whitespace and quotes
-        cleaned = key_value.strip()
-        
-        # If the string starts with a quote, it means the JSON is wrapped in quotes
-        # We need to remove the outer quotes AND unescape the inner content
-        if cleaned.startswith('"') and cleaned.endswith('"'):
-            # Remove outer quotes
-            cleaned = cleaned[1:-1]
-            # Replace escaped quotes with regular quotes
-            cleaned = cleaned.replace('\\"', '"')
-            # Replace escaped newlines with actual newlines
-            cleaned = cleaned.replace('\\n', '\n')
-        
-        # Now find the JSON object
-        start_index = cleaned.find('{')
+        start_index = clean_key_str.find('{')
         if start_index == -1:
-            raise ValueError("Could not find '{' in Firebase key")
+             raise ValueError("Could not find the starting '{' bracket in the Firebase key string.")
+
+        # 2. Process the string from the first { and handle all escaped sequences
+        processed_json_string = clean_key_str[start_index:]
         
-        json_string = cleaned[start_index:]
+        # The code is designed to handle the full JSON object as the environment variable
+        cred_dict = json.loads(processed_json_string)
         
-        # Parse the JSON
-        cred_dict = json.loads(json_string)
-        
-        # Initialize Firebase
+        # 3. Initialize Firebase
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred, {'projectId': FIREBASE_PROJECT_ID})
         db = firestore.client()
         
-        # Initialize Algolia
+        # 4. Initialize Algolia
         algolia_client = SearchClient.create(ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY)
         algolia_index = algolia_client.init_index(ALGOLIA_INDEX_NAME)
         
         print("✅ Firebase & Algolia Clients Initialized Successfully.")
         return True
 
-    except json.JSONDecodeError as e:
-        print(f"❌ JSON Parsing Error: {e}")
-        print(f"Problematic string: {key_value[:100]}...")  # First 100 chars for debugging
-        return False
     except Exception as e:
         print(f"❌ CRITICAL FATAL: Database/Search Initialization failed. Error: {e}")
         return False
@@ -119,7 +102,7 @@ bot_stats = {
 }
 RATE_LIMIT_SECONDS = 1 
 
-# --- CORE LOGIC FUNCTIONS ---
+# --- CORE LOGIC FUNCTIONS (Unchanged) ---
 def check_rate_limit(user_id: int) -> bool:
     current_time = time.time()
     if user_id in user_sessions and current_time - user_sessions[user_id].get('last_action', 0) < RATE_LIMIT_SECONDS:
@@ -147,7 +130,7 @@ def algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
         results = []
         for hit in search_results['hits']:
             if hit.get('post_id'):
-                results.append({"title": hit.get('title', 'Unknown Title'), "post_id": hit['post_id']})
+                results.append({"title": hit.get('title', 'Unknown Movie'), "post_id": hit['post_id']})
         return results
         
     except Exception as e:
@@ -203,7 +186,7 @@ async def cmd_start(message: Message):
             f"**Quick Commands:**\n"
             f"• /total_movies: DB में Indexed Movies की संख्या।\n"
             f"• /stats: विस्तृत प्रदर्शन (Performance) आँकड़े।\n"
-            f"• /broadcast [संदेश]: सभी यूज़र्स को भेजें।\n"
+            f"• /broadcast [संदेश]: सभी यूज़र्स को भेजें।\n"
             f"• /help: सभी कमांड्स की सूची।\n"
             f"• /cleanup_users: Inactive users को हटाएँ।\n"
             f"• /reload_config: Environment variables रीलोड करें।"
@@ -355,7 +338,7 @@ async def cmd_help(message: Message):
         await message.answer("नमस्ते! फिल्म का नाम टाइप करें और 20 सबसे सटीक परिणाम पाएँगे।")
         return
         
-    help_text = ("🎬 **Admin Panel Commands:**\n\n1. **/stats** - Bot के प्रदर्शन (performance) के आँकड़े देखें।\n2. **/broadcast [Message/Photo/Video]** - सभी यूज़र्स को संदेश भेजें।\n3. **/total_movies** - Firebase में Indexed Movies की लाइव संख्या देखें।\n4. **/refresh** - Cloud service status चेक करें।\n5. **/cleanup_users** - Inactive users को मेमोरी से हटाएँ।\n6. **/reload_config** - Environment variables की स्थिति देखें।\n\nℹ️ **User Logic:** Search **Algolia** द्वारा 20 परिणामों के साथ चलता है। Link Generation **Render-Safe** है।")
+    help_text = ("🎬 **Admin Panel Commands:**\n\n1. **/stats** - Bot के प्रदर्शन (performance) के आँकड़े देखें।\n2. **/broadcast [Message/Photo/Video]** - सभी यूज़र्स को संदेश भेजें।\n3. **/total_movies** - Firebase में Indexed Movies की लाइव संख्या देखें।\n4. **/refresh** - Cloud service status चेक करें।\n5. **/cleanup_users** - Inactive users को मेमोरी से हटाएँ।\n6. **/reload_config** - Environment variables की स्थिति देखें।\n\nℹ️ **User Logic:** Search **Algolia** द्वारा 20 परिणामों के साथ चलता है। Link Generation **Render-Safe** है।")
     await message.answer(help_text, parse_mode=ParseMode.MARKDOWN)
 
 @dp.message(Command("stats"))
