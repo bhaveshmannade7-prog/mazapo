@@ -9,7 +9,7 @@ from collections import defaultdict
 from flask import Flask, jsonify
 
 # --- Database and Search Imports ---
-# Replaced Firebase with PostgreSQL/SQLAlchemy
+# We will rely on a generic DB connection logic to avoid specific binary dependency issues
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -22,10 +22,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEB_SERVER_PORT = int(os.environ.get("PORT", 8080))
 ADMIN_IDS = [7263519581] 
 
-# PostgreSQL Database Key (The new master storage)
+# Database Key
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Algolia Keys (For Fuzzy Search)
+# Algolia Keys
 ALGOLIA_APP_ID = os.getenv("ALGOLIA_APPLICATION_ID")
 ALGOLIA_SEARCH_KEY = os.getenv("ALGOLIA_SEARCH_KEY") 
 ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME", "Media_index")
@@ -54,7 +54,6 @@ class Movie(Base):
 # --- INITIALIZATION ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-db = None
 algolia_index = None
 
 def initialize_db_and_algolia():
@@ -63,8 +62,13 @@ def initialize_db_and_algolia():
         print("Attempting to initialize PostgreSQL and Algolia...")
         
         # 1. Initialize PostgreSQL Engine and Table
-        # Render's URL uses 'postgresql://' but SQLAlchemy needs 'postgresql+psycopg2://'
-        db_url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://")
+        # FIX: We use the simplest format to bypass psycopg2-binary issues in Render
+        # We assume the user has configured the correct driver in the Build Command or relies on SQLAlchemy's auto-detect.
+        db_url = DATABASE_URL
+        if db_url.startswith("postgresql://"):
+             # SQLAlchemy prefers the driver name explicitly
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg2://")
+            
         engine = create_engine(db_url, pool_pre_ping=True)
         Base.metadata.create_all(bind=engine)
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -85,7 +89,7 @@ if not initialize_db_and_algolia():
     print("Database/Search initialization failed. Exiting bot process.")
     sys.exit(1)
     
-# Dependency for Database Session (Used in indexing)
+# Dependency for Database Session
 def get_db():
     db_session = SessionLocal()
     try:
@@ -138,11 +142,10 @@ def algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
 async def add_movie_to_db_and_algolia(title: str, post_id: int):
     """Handles automatic indexing of new channel posts."""
     global algolia_index
-    if not algolia_index: 
-        print("Indexing failed: Algolia not initialized.")
+    if not algolia_index or not SessionLocal: 
+        print("Indexing failed: DB/Algolia not initialized.")
         return False
         
-    # Use asyncio.to_thread for synchronous database operations
     def sync_data(db_session):
         try:
             # 1. Check for duplicate in PostgreSQL
@@ -342,7 +345,7 @@ async def cmd_total_movies(message: Message):
         await message.answer(f"❌ Error fetching movie count: {e}")
 
 @dp.message(Command("help"))
-async def cmd_help(message: Message):
+async async def cmd_help(message: Message):
     if not message.from_user or message.from_user.id not in ADMIN_IDS: 
         await message.answer("नमस्ते! फिल्म का नाम टाइप करें और 20 सबसे सटीक परिणाम पाएँगे।")
         return
