@@ -125,7 +125,7 @@ def initialize_db_and_algolia_with_retry(max_retries: int = 5, base_delay: float
             
             algolia_client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY)
             
-            # FIX: Initialize the specific index to use Index methods (save_object, search)
+            # Index object is required for save_object and search
             algolia_index = algolia_client.init_index(ALGOLIA_INDEX_NAME) 
             
             try:
@@ -200,13 +200,13 @@ def sync_algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
     bot_stats["total_searches"] += 1
     
     try:
-        # FIX: Using search() method on index object, enabling fuzzy search by default
+        # Fuzzy Search: Algolia handles typo tolerance by default in search()
         search_results = algolia_index.search(
             query=query,
             request_options={
                 "attributesToRetrieve": ['title', 'post_id'],
                 "hitsPerPage": limit,
-                "typoTolerance": True # Ensuring high accuracy fuzzy search
+                "typoTolerance": True 
             }
         )
         bot_stats["algolia_searches"] += 1
@@ -231,7 +231,7 @@ def sync_add_movie_to_db_and_algolia(title: str, post_id: int):
         
     db_session = SessionLocal()
     try:
-        # 1. DB Check for Duplicates
+        # 1. DB Check for Duplicates (post_id)
         existing_movie = db_session.query(Movie).filter(Movie.post_id == post_id).first()
         if existing_movie: 
             logger.info(f"Movie already indexed in DB: {title}")
@@ -243,9 +243,9 @@ def sync_add_movie_to_db_and_algolia(title: str, post_id: int):
         db_session.commit()
         db_session.refresh(new_movie)
 
-        # 3. Add to Algolia (FIXED: Using save_object on the correct index object)
+        # 3. Add to Algolia (FIXED: Removed 'body=' keyword)
         algolia_index.save_object(
-            body={
+            { # object is passed directly, not as 'body=' keyword
                 "objectID": str(new_movie.id),
                 "title": title.strip(),
                 "post_id": post_id,
@@ -290,9 +290,9 @@ async def cmd_start(message: Message):
         hours = uptime_seconds // 3600
         minutes = (uptime_seconds % 3600) // 60
         
-        # FIX: Ensuring correct MarkdownV2 escaping for Admin Commands to work
+        # FIX: Professional English and correct MarkdownV2 escaping
         admin_welcome_text = (
-            f"👑 *Welcome, Admin\! Bot is LIVE\\.*\n"
+            f"👑 *Admin Dashboard - Status Report*\n"
             f"────────────────────────\n"
             f"🟢 *Status:* Operational\n"
             f"⏱ *Uptime:* {hours}h {minutes}m\n"
@@ -300,18 +300,17 @@ async def cmd_start(message: Message):
             f"🔍 *Total Searches:* {bot_stats['total_searches']}\n"
             f"────────────────────────\n"
             f"*Quick Commands:*\n"
-            f"• /total\\_movies: DB में Indexed Movies की संख्या\\.\n"
-            f"• /stats: विस्तृत प्रदर्शन \\(Performance\\) आँकड़े\\.\n"
-            f"• /broadcast \\[संदेश\\]: सभी यूज़र्स को भेजें\\.\n"
-            f"• /help: सभी कमांड्स की सूची\\.\n"
-            f"• /cleanup\\_users: Inactive users को हटाएँ\\.\n"
-            f"• /reload\\_config: Environment variables रीलोड करें\\."
+            f"• /total\\_movies \\(DB Index Count\\)\n"
+            f"• /stats \\(Performance Metrics\\)\n"
+            f"• /broadcast \\[message\\] \\(Send message to all users\\)\n"
+            f"• /cleanup\\_users \\(Clear in\\-memory user list\\)\n"
+            f"• /help \\(List of all commands\\)"
         )
         await message.answer(admin_welcome_text, parse_mode=ParseMode.MARKDOWN_V2) 
         logger.info(f"✅ Sent admin welcome to user {user_id}")
         return 
 
-    # FIX: User-friendly message added here
+    # FIX: New User-friendly message for joining channels
     if user_id not in verified_users:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"🔗 Channel Join Karein", url=f"https://t.me/{JOIN_CHANNEL_USERNAME}")],
@@ -324,12 +323,12 @@ async def cmd_start(message: Message):
             "Bot ka upyog karne ke liye, kripya neeche diye gaye "
             "channel aur group ko **join karein** aur phir "
             "**'Mene Join Kar Liya'** button dabayein: 👇\n\n"
-            "➡️ *Access Sirf Joined Users ke liye hai\\!*"
+            "➡️ _Access Sirf Joined Users ke liye hai\!_"
         )
         await message.answer(welcome_msg, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"✅ Sent join prompt to user {user_id}")
     else:
-        # FIX: User-friendly message added here
+        # FIX: User-friendly message after verification
         search_msg = (
             "🎬 **Ready to Search?**\n\n"
             "🔎 **Search:** Film ka poora ya thoda sa naam type karein\\.\n"
@@ -465,7 +464,7 @@ async def handle_channel_post(message: Message):
         logger.error(f"Error in handle_channel_post: {e}")
 
 # ====================================================================
-# ADMIN HANDLERS (Markdown is fixed via cmd_start)
+# ADMIN HANDLERS 
 # ====================================================================
 
 @dp.message(Command("refresh"))
