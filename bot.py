@@ -20,8 +20,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from algoliasearch.search_client import SearchClient
 from rapidfuzz import fuzz 
 
+# ====================================================================
+# ENVIRONMENT VARIABLES & CONFIGURATION
+# ====================================================================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEB_SERVER_PORT = int(os.environ.get("PORT", 8080))
+# Hardcoded Admin ID - Please ensure this is your correct Telegram User ID
 ADMIN_IDS = [7263519581] 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -30,8 +35,12 @@ ALGOLIA_APP_ID = os.getenv("ALGOLIA_APPLICATION_ID")
 ALGOLIA_SEARCH_KEY = os.getenv("ALGOLIA_SEARCH_KEY") 
 ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME", "Media_index")
 
+# 🚨 UPDATED LIBRARY CHANNEL ID (YOUR CORRECT VALUE)
+# NOTE: It is still best practice to set this in Render's environment variables.
+CORRECT_LIBRARY_CHANNEL_ID = -1003138949015 
+
 LIBRARY_CHANNEL_USERNAME = os.getenv("LIBRARY_CHANNEL_USERNAME", "MOVIEMAZA19")
-LIBRARY_CHANNEL_ID = int(os.getenv("LIBRARY_CHANNEL_ID", -1002970735025))
+LIBRARY_CHANNEL_ID = int(os.getenv("LIBRARY_CHANNEL_ID", CORRECT_LIBRARY_CHANNEL_ID))
 JOIN_CHANNEL_USERNAME = os.getenv("JOIN_CHANNEL_USERNAME", "MOVIEMAZASU")
 JOIN_GROUP_USERNAME = os.getenv("JOIN_GROUP_USERNAME", "THEGREATMOVIESL9")
 
@@ -71,6 +80,10 @@ except Exception as e:
     DEMO_MODE = True
 
 dp = Dispatcher()
+
+# ====================================================================
+# INITIALIZATION & DATABASE LOGIC
+# ====================================================================
 
 def initialize_db_and_algolia_with_retry(max_retries: int = 5, base_delay: float = 2.0) -> bool:
     """Initialize DB and Algolia with exponential backoff retry logic."""
@@ -147,6 +160,10 @@ def get_db():
         yield db_session
     finally:
         db_session.close()
+
+# ====================================================================
+# BOT STATE & SEARCH UTILITIES
+# ====================================================================
 
 user_sessions: Dict[int, Dict] = defaultdict(dict)
 verified_users: set = set() 
@@ -226,6 +243,10 @@ async def add_movie_to_db_and_algolia(title: str, post_id: int):
             db_session.close()
 
     return await asyncio.to_thread(sync_data)
+
+# ====================================================================
+# TELEGRAM HANDLERS
+# ====================================================================
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -394,6 +415,10 @@ async def handle_channel_post(message: Message):
     except Exception as e:
         print(f"Error in handle_channel_post: {e}")
 
+# ====================================================================
+# ADMIN HANDLERS (Same as before)
+# ====================================================================
+
 @dp.message(Command("refresh"))
 async def cmd_refresh(message: Message):
     if not message.from_user or message.from_user.id not in ADMIN_IDS: 
@@ -523,6 +548,10 @@ async def cmd_broadcast(message: Message):
     )
     await status_msg.edit_text(summary, parse_mode=ParseMode.MARKDOWN)
 
+# ====================================================================
+# FLASK SERVER (Health Check)
+# ====================================================================
+
 app_flask = Flask(__name__)
 
 @app_flask.route('/', methods=['GET', 'POST'])
@@ -553,6 +582,10 @@ def health_endpoint():
 def start_flask_server():
     print(f"🌐 Starting Flask server on port {WEB_SERVER_PORT} for health checks...")
     app_flask.run(host='0.0.0.0', port=WEB_SERVER_PORT, debug=False, use_reloader=False)
+
+# ====================================================================
+# MAIN BOT RUNNER
+# ====================================================================
 
 async def start_polling_and_run():
     """Start the bot with improved webhook deletion and comprehensive logging."""
