@@ -18,7 +18,7 @@ from aiogram.enums import ParseMode
 from sqlalchemy import create_engine, Column, Integer, String, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from algoliasearch.search_client import SearchClient # Used SearchClient and Init_Index
+from algoliasearch.search_client import SearchClient 
 from rapidfuzz import fuzz 
 
 # ====================================================================
@@ -125,11 +125,10 @@ def initialize_db_and_algolia_with_retry(max_retries: int = 5, base_delay: float
             
             algolia_client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY)
             
-            # FIX: Initialize the specific index to use Index methods
+            # FIX: Initialize the specific index to use Index methods (save_object, search)
             algolia_index = algolia_client.init_index(ALGOLIA_INDEX_NAME) 
             
             try:
-                # Use the index object for search
                 algolia_index.search(
                     query="test",
                     request_options={"hitsPerPage": 1}
@@ -201,12 +200,13 @@ def sync_algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
     bot_stats["total_searches"] += 1
     
     try:
-        search_results = algolia_index.search( # FIX: search() method on index object
+        # FIX: Using search() method on index object, enabling fuzzy search by default
+        search_results = algolia_index.search(
             query=query,
             request_options={
                 "attributesToRetrieve": ['title', 'post_id'],
                 "hitsPerPage": limit,
-                "typoTolerance": True # Ensure good fuzzy search
+                "typoTolerance": True # Ensuring high accuracy fuzzy search
             }
         )
         bot_stats["algolia_searches"] += 1
@@ -231,17 +231,19 @@ def sync_add_movie_to_db_and_algolia(title: str, post_id: int):
         
     db_session = SessionLocal()
     try:
-        # FIX: Check for duplicate post_id in DB to prevent repeated entries
+        # 1. DB Check for Duplicates
         existing_movie = db_session.query(Movie).filter(Movie.post_id == post_id).first()
         if existing_movie: 
+            logger.info(f"Movie already indexed in DB: {title}")
             return False
 
+        # 2. Add to DB
         new_movie = Movie(title=title.strip(), post_id=post_id)
         db_session.add(new_movie)
         db_session.commit()
         db_session.refresh(new_movie)
 
-        # FIX: Now using save_object on the correct index object
+        # 3. Add to Algolia (FIXED: Using save_object on the correct index object)
         algolia_index.save_object(
             body={
                 "objectID": str(new_movie.id),
@@ -256,6 +258,7 @@ def sync_add_movie_to_db_and_algolia(title: str, post_id: int):
     except Exception as e:
         db_session.rollback()
         logger.error(f"❌ Error adding movie to DB/Algolia: {e}")
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
         return False
     finally:
         db_session.close()
@@ -308,16 +311,32 @@ async def cmd_start(message: Message):
         logger.info(f"✅ Sent admin welcome to user {user_id}")
         return 
 
+    # FIX: User-friendly message added here
     if user_id not in verified_users:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🔗 Join Channel", url=f"https://t.me/{JOIN_CHANNEL_USERNAME}")],
-            [InlineKeyboardButton(text=f"👥 Join Group", url=f"https://t.me/{JOIN_GROUP_USERNAME}")],
-            [InlineKeyboardButton(text="✅ I Joined", callback_data="joined")]
+            [InlineKeyboardButton(text=f"🔗 Channel Join Karein", url=f"https://t.me/{JOIN_CHANNEL_USERNAME}")],
+            [InlineKeyboardButton(text=f"👥 Group Join Karein", url=f"https://t.me/{JOIN_GROUP_USERNAME}")],
+            [InlineKeyboardButton(text="✅ Mene Join Kar Liya", callback_data="joined")]
         ])
-        await message.answer("नमस्ते! सर्च करने के लिए 'I Joined' पर क्लिक करें।", reply_markup=keyboard)
+        
+        welcome_msg = (
+            "👋 **नमस्ते\! Aapka Swagat Hai**\n\n"
+            "Bot ka upyog karne ke liye, kripya neeche diye gaye "
+            "channel aur group ko **join karein** aur phir "
+            "**'Mene Join Kar Liya'** button dabayein: 👇\n\n"
+            "➡️ *Access Sirf Joined Users ke liye hai\\!*"
+        )
+        await message.answer(welcome_msg, reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"✅ Sent join prompt to user {user_id}")
     else:
-        await message.answer("नमस्ते! 20 सबसे सटीक परिणामों के लिए फिल्म का नाम टाइप करें। \n🛡️ Safe Access: क्लिक करने पर आपको प्रतिबंधित (Restricted) डाउनलोड लिंक मिलेगा।")
+        # FIX: User-friendly message added here
+        search_msg = (
+            "🎬 **Ready to Search?**\n\n"
+            "🔎 **Search:** Film ka poora ya thoda sa naam type karein\\.\n"
+            "✨ *Accuracy:* Spelling galat hone par bhi aapko **20 behtareen options** milenge\\.\n"
+            "🛡️ *Safe Access:* Button dabate hi aapko seedha **download link** mil jaayega\\."
+        )
+        await message.answer(search_msg, parse_mode=ParseMode.MARKDOWN_V2)
         logger.info(f"✅ Sent welcome message to verified user {user_id}")
 
 @dp.callback_query(F.data == "joined")
@@ -327,9 +346,14 @@ async def process_joined(callback: types.CallbackQuery):
     if callback.from_user: 
         verified_users.add(callback.from_user.id)
         logger.info(f"✅ User {callback.from_user.id} verified")
-    welcome_text = "✅ एक्सेस मिल गया! अब आप फिल्में खोज सकते हैं।"
+        
+    search_msg = (
+        "✅ **Access Granted\!** 🎉\n\n"
+        "Ab aap nischint hokar search kar sakte hain\\.\n"
+        "🔎 Film ka naam type karein aur turant results dekhein\\."
+    )
     if callback.message and isinstance(callback.message, Message):
-        await callback.message.edit_text(welcome_text, reply_markup=None) 
+        await callback.message.edit_text(search_msg, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2) 
     await callback.answer("✅ Access granted! You can now start searching.")
 
 @dp.message(F.text)
@@ -355,7 +379,7 @@ async def handle_search(message: Message):
         results = await algolia_fuzzy_search(query, limit=20) 
         
         if not results:
-            await message.answer(f"❌ कोई मूवी नहीं मिली: {query}")
+            await message.answer(f"❌ Koi Movie Nahin Mili: **{query}**")
             logger.info(f"❌ No results found for: '{query}'")
             return
         
@@ -369,8 +393,9 @@ async def handle_search(message: Message):
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         sent_msg = await message.answer(
-            f"🔍 {len(keyboard_buttons)} परिणाम मिले: {query}",
-            reply_markup=keyboard
+            f"🎯 **{len(keyboard_buttons)}** Sateek Parinaam Milein: **{query}**",
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN_V2
         )
         user_sessions[user_id]['last_search_msg'] = sent_msg.message_id
         logger.info(f"✅ Sent {len(keyboard_buttons)} results to user {user_id}")
@@ -378,7 +403,7 @@ async def handle_search(message: Message):
     except Exception as e:
         logger.error(f"❌ ERROR in handle_search: {e}")
         logger.error(f"❌ Traceback: {traceback.format_exc()}")
-        await message.answer("❌ सर्च में कोई त्रुटि हुई।")
+        await message.answer("❌ Search mein koi aantarik samasya hui.")
 
 @dp.callback_query(F.data.startswith("post_"))
 async def send_movie_link(callback: types.CallbackQuery):
@@ -387,14 +412,14 @@ async def send_movie_link(callback: types.CallbackQuery):
         
         user_id = callback.from_user.id
         if user_id not in ADMIN_IDS and user_id not in verified_users: 
-            await callback.answer("🛑 पहुँच वर्जित (Access Denied)。")
+            await callback.answer("🛑 Pahunch Varjit (Access Denied)。")
             logger.info(f"⚠️ Unverified user {user_id} tried to access movie")
             return
 
         try: 
             post_id = int(callback.data.split('_')[1])
         except (ValueError, IndexError): 
-            await callback.answer("❌ गलत चुनाव।")
+            await callback.answer("❌ Galat chunav.")
             return
         
         channel_id_clean = str(LIBRARY_CHANNEL_ID).replace("-100", "") 
@@ -412,16 +437,17 @@ async def send_movie_link(callback: types.CallbackQuery):
         
         await bot.send_message(
             chat_id=user_id,
-            text="✅ डाउनलोड लिंक तैयार है!\n\nयह लिंक आपको सीधे मूवी पोस्ट पर ले जाएगा。",
-            reply_markup=keyboard
+            text="🔗 **Aapka Link Taiyar Hai!**\n\nIsko dabate hi aapko seedha movie post par le jaaya jaayega.",
+            reply_markup=keyboard,
+            parse_mode=ParseMode.MARKDOWN_V2
         )
-        await callback.answer("✅ लिंक भेज दिया गया है।")
+        await callback.answer("✅ Link bhej diya gaya hai.")
         logger.info(f"✅ Sent movie link (post {post_id}) to user {user_id}")
         
     except Exception as e:
         logger.error(f"❌ ERROR in send_movie_link: {e}")
         logger.error(f"❌ Traceback: {traceback.format_exc()}")
-        await callback.answer("❌ लिंक बनाने में त्रुटि हुई है。")
+        await callback.answer("❌ Link banane mein samasya hui.")
 
 @dp.channel_post()
 async def handle_channel_post(message: Message):
@@ -437,6 +463,10 @@ async def handle_channel_post(message: Message):
                 await add_movie_to_db_and_algolia(title, post_id) 
     except Exception as e:
         logger.error(f"Error in handle_channel_post: {e}")
+
+# ====================================================================
+# ADMIN HANDLERS (Markdown is fixed via cmd_start)
+# ====================================================================
 
 @dp.message(Command("refresh"))
 async def cmd_refresh(message: Message):
@@ -493,7 +523,7 @@ async def cmd_help(message: Message):
         "4. /refresh - Cloud service status चेक करें।\n"
         "5. /cleanup_users - Inactive users को हटाएँ।\n"
         "6. /reload_config - Environment variables की स्थिति देखें।\n\n"
-        "ℹ️ User Logic: Search Algolia द्वारा 20 परिणामों के साथ चलता है। Link Generation Render-Safe है।"
+        "ℹ️ User Logic: Search Algolia द्वारा 20 परिणामों के साथ चलता है। Link Generation Render-Safe है。"
     )
     await message.answer(help_text)
 
