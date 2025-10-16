@@ -18,8 +18,12 @@ from aiogram.enums import ParseMode
 from sqlalchemy import create_engine, Column, Integer, String, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from algoliasearch.search.client import SearchClientSync
+from algoliasearch.search.client import SearchClientSync # Replit Fix
 from rapidfuzz import fuzz 
+
+# ====================================================================
+# CONFIGURATION
+# ====================================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEB_SERVER_PORT = int(os.environ.get("PORT", 8080))
-ADMIN_IDS = [7263519581] 
+ADMIN_IDS = [7263519581] # Admin ID is still hardcoded.
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -80,6 +84,10 @@ except Exception as e:
     DEMO_MODE = True
 
 dp = Dispatcher()
+
+# ====================================================================
+# INITIALIZATION & DB/ALGOLIA SETUP
+# ====================================================================
 
 def initialize_db_and_algolia_with_retry(max_retries: int = 5, base_delay: float = 2.0) -> bool:
     """Initialize DB and Algolia with exponential backoff retry logic."""
@@ -177,7 +185,11 @@ def add_user(user_id: int, username: Optional[str] = None, first_name: Optional[
     if user_id not in users_database:
         users_database[user_id] = {"user_id": user_id}
 
-def algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
+# ====================================================================
+# SYNCHRONOUS Algolia/DB Operations (FIXED with asyncio.to_thread)
+# ====================================================================
+
+def sync_algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
     global algolia_index, bot_stats
     if not algolia_index: 
         logger.warning("⚠️ Algolia not initialized. Cannot perform search.")
@@ -198,53 +210,66 @@ def algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
         
         results = []
         for hit in search_results.hits:
-            if hasattr(hit, 'post_id'):
-                results.append({"title": getattr(hit, 'title', 'Unknown Movie'), "post_id": hit.post_id})
+            # FIX: Using hit.get() for safer attribute access
+            post_id = hit.get('post_id')
+            if post_id:
+                results.append({"title": hit.get('title', 'Unknown Movie'), "post_id": post_id})
         return results
         
     except Exception as e:
         logger.error(f"Error searching with Algolia: {e}")
         return []
 
-async def add_movie_to_db_and_algolia(title: str, post_id: int):
+def sync_add_movie_to_db_and_algolia(title: str, post_id: int):
     """Handles automatic indexing of new channel posts."""
     global algolia_index
     if not algolia_index or not SessionLocal: 
         logger.warning("⚠️ Indexing failed: DB/Algolia not initialized.")
         return False
         
-    def sync_data():
-        db_session = SessionLocal()
-        try:
-            existing_movie = db_session.query(Movie).filter(Movie.post_id == post_id).first()
-            if existing_movie: 
-                return False
-
-            new_movie = Movie(title=title.strip(), post_id=post_id)
-            db_session.add(new_movie)
-            db_session.commit()
-            db_session.refresh(new_movie)
-
-            algolia_index.save_object(
-                index_name=ALGOLIA_INDEX_NAME,
-                body={
-                    "objectID": str(new_movie.id),
-                    "title": title.strip(),
-                    "post_id": post_id,
-                }
-            )
-            
-            logger.info(f"✅ Auto-Indexed: {title} (Post ID: {post_id})")
-            return True
-            
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"❌ Error adding movie to DB/Algolia: {e}")
+    db_session = SessionLocal()
+    try:
+        # FIX: Check for duplicate post_id in DB to prevent repeated entries
+        existing_movie = db_session.query(Movie).filter(Movie.post_id == post_id).first()
+        if existing_movie: 
             return False
-        finally:
-            db_session.close()
 
-    return await asyncio.to_thread(sync_data)
+        new_movie = Movie(title=title.strip(), post_id=post_id)
+        db_session.add(new_movie)
+        db_session.commit()
+        db_session.refresh(new_movie)
+
+        # FIX: Using the newly created DB primary key (id) for Algolia objectID
+        algolia_index.save_object(
+            index_name=ALGOLIA_INDEX_NAME,
+            body={
+                "objectID": str(new_movie.id),
+                "title": title.strip(),
+                "post_id": post_id,
+            }
+        )
+        
+        logger.info(f"✅ Auto-Indexed: {title} (Post ID: {post_id})")
+        return True
+        
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"❌ Error adding movie to DB/Algolia: {e}")
+        return False
+    finally:
+        db_session.close()
+
+# ASYNCHRONOUS wrappers for the main bot
+def algolia_fuzzy_search(query: str, limit: int = 20):
+    return asyncio.to_thread(sync_algolia_fuzzy_search, query, limit)
+
+async def add_movie_to_db_and_algolia(title: str, post_id: int):
+    return await asyncio.to_thread(sync_add_movie_to_db_and_algolia, title, post_id)
+
+
+# ====================================================================
+# TELEGRAM HANDLERS 
+# ====================================================================
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -261,8 +286,9 @@ async def cmd_start(message: Message):
         hours = uptime_seconds // 3600
         minutes = (uptime_seconds % 3600) // 60
         
+        # FIX: Using MarkdownV2 and escaping necessary characters for robust display
         admin_welcome_text = (
-            f"👑 *Welcome, Admin! Bot is LIVE\\.*\n"
+            f"👑 *Welcome, Admin\! Bot is LIVE\\.*\n"
             f"────────────────────────\n"
             f"🟢 *Status:* Operational\n"
             f"⏱ *Uptime:* {hours}h {minutes}m\n"
@@ -277,7 +303,7 @@ async def cmd_start(message: Message):
             f"• /cleanup\\_users: Inactive users को हटाएँ\\.\n"
             f"• /reload\\_config: Environment variables रीलोड करें\\."
         )
-        await message.answer(admin_welcome_text, parse_mode=ParseMode.MARKDOWN)
+        await message.answer(admin_welcome_text, parse_mode=ParseMode.MARKDOWN_V2) # ParseMode changed
         logger.info(f"✅ Sent admin welcome to user {user_id}")
         return 
 
@@ -325,7 +351,7 @@ async def handle_search(message: Message):
             return
         
         logger.info(f"🔍 Searching Algolia for: '{query}'")
-        results = algolia_fuzzy_search(query, limit=20)
+        results = await algolia_fuzzy_search(query, limit=20) # AWAIT added
         
         if not results:
             await message.answer(f"❌ कोई मूवी नहीं मिली: {query}")
@@ -407,7 +433,7 @@ async def handle_channel_post(message: Message):
             post_id = message.message_id 
             
             if title and title != "Unknown Movie" and post_id:
-                await add_movie_to_db_and_algolia(title, post_id)
+                await add_movie_to_db_and_algolia(title, post_id) # AWAIT added
     except Exception as e:
         logger.error(f"Error in handle_channel_post: {e}")
 
@@ -631,7 +657,8 @@ async def start_bot():
             bot, 
             allowed_updates=dp.resolve_used_update_types(),
             drop_pending_updates=True,
-            timeout=60
+            timeout=60, # Use timeout for polling to maintain stability
+            request_timeout=60.0 # Use request_timeout for API call stability
         )
     except Exception as polling_error:
         logger.error("=" * 70)
@@ -649,16 +676,19 @@ async def main():
     logger.info("🚀 TELEGRAM MOVIE BOT - DEPLOYMENT")
     logger.info("=" * 70)
     
+    # FIX: Flask thread start is now controlled in main entry for stability.
     flask_thread = Thread(target=start_flask_server, daemon=True)
     flask_thread.start()
     logger.info("✅ Flask health check server started in background thread")
     
+    # Give Flask a moment to bind the port.
     await asyncio.sleep(2)
     
     await start_bot()
 
 if __name__ == "__main__":
     try:
+        # Start the main async entry point
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("\n⚠️ Bot stopped by user.")
