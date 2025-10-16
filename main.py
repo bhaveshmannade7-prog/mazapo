@@ -18,8 +18,7 @@ from aiogram.enums import ParseMode
 from sqlalchemy import create_engine, Column, Integer, String, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-# FINAL FIX: Corrected class name to SearchClient (which is synchronous in algoliasearch v3)
-from algoliasearch.search_client import SearchClient 
+from algoliasearch.search_client import SearchClient # Used SearchClient and Init_Index
 from rapidfuzz import fuzz 
 
 # ====================================================================
@@ -124,14 +123,16 @@ def initialize_db_and_algolia_with_retry(max_retries: int = 5, base_delay: float
                 test_session.close()
                 raise Exception(f"DB health check failed: {e}")
             
-            # FIX: Used the correct class name 'SearchClient'
             algolia_client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY)
-            algolia_index = algolia_client
+            
+            # FIX: Initialize the specific index to use Index methods
+            algolia_index = algolia_client.init_index(ALGOLIA_INDEX_NAME) 
             
             try:
-                algolia_client.search_single_index(
-                    index_name=ALGOLIA_INDEX_NAME,
-                    search_params={"query": "test", "hitsPerPage": 1}
+                # Use the index object for search
+                algolia_index.search(
+                    query="test",
+                    request_options={"hitsPerPage": 1}
                 )
                 logger.info("✅ Algolia connection verified.")
             except Exception as e:
@@ -200,18 +201,18 @@ def sync_algolia_fuzzy_search(query: str, limit: int = 20) -> List[Dict]:
     bot_stats["total_searches"] += 1
     
     try:
-        search_results = algolia_index.search_single_index(
-            index_name=ALGOLIA_INDEX_NAME,
-            search_params={
-                "query": query,
+        search_results = algolia_index.search( # FIX: search() method on index object
+            query=query,
+            request_options={
                 "attributesToRetrieve": ['title', 'post_id'],
-                "hitsPerPage": limit
+                "hitsPerPage": limit,
+                "typoTolerance": True # Ensure good fuzzy search
             }
         )
         bot_stats["algolia_searches"] += 1
         
         results = []
-        for hit in search_results.hits:
+        for hit in search_results.get('hits', []):
             post_id = hit.get('post_id')
             if post_id:
                 results.append({"title": hit.get('title', 'Unknown Movie'), "post_id": post_id})
@@ -240,9 +241,8 @@ def sync_add_movie_to_db_and_algolia(title: str, post_id: int):
         db_session.commit()
         db_session.refresh(new_movie)
 
-        # FIX: Using the newly created DB primary key (id) for Algolia objectID
+        # FIX: Now using save_object on the correct index object
         algolia_index.save_object(
-            index_name=ALGOLIA_INDEX_NAME,
             body={
                 "objectID": str(new_movie.id),
                 "title": title.strip(),
@@ -287,7 +287,7 @@ async def cmd_start(message: Message):
         hours = uptime_seconds // 3600
         minutes = (uptime_seconds % 3600) // 60
         
-        # FIX: Using MarkdownV2 and escaping necessary characters for robust display
+        # FIX: Ensuring correct MarkdownV2 escaping for Admin Commands to work
         admin_welcome_text = (
             f"👑 *Welcome, Admin\! Bot is LIVE\\.*\n"
             f"────────────────────────\n"
@@ -412,7 +412,7 @@ async def send_movie_link(callback: types.CallbackQuery):
         
         await bot.send_message(
             chat_id=user_id,
-            text="✅ डाउनलोड लिंक तैयार है!\n\nयह लिंक आपको सीधे मूवी पोस्ट पर ले जाएगा।",
+            text="✅ डाउनलोड लिंक तैयार है!\n\nयह लिंक आपको सीधे मूवी पोस्ट पर ले जाएगा。",
             reply_markup=keyboard
         )
         await callback.answer("✅ लिंक भेज दिया गया है।")
@@ -493,7 +493,7 @@ async def cmd_help(message: Message):
         "4. /refresh - Cloud service status चेक करें।\n"
         "5. /cleanup_users - Inactive users को हटाएँ।\n"
         "6. /reload_config - Environment variables की स्थिति देखें।\n\n"
-        "ℹ️ User Logic: Search Algolia द्वारा 20 परिणामों के साथ चलता है। Link Generation Render-Safe है。"
+        "ℹ️ User Logic: Search Algolia द्वारा 20 परिणामों के साथ चलता है। Link Generation Render-Safe है।"
     )
     await message.answer(help_text)
 
@@ -687,6 +687,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        # Start the main async entry point
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("\n⚠️ Bot stopped by user.")
