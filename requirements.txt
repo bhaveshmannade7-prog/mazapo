@@ -5,7 +5,6 @@ psycopg2-binary==2.9.11
 algoliasearch==3.0.0
 rapidfuzz==3.14.1
 requests==2.32.5
-# Baaki zaruri dependencies jo Replit ne jodi thin:
 pydantic==2.11.10
 pydantic-core==2.33.2
 python-dateutil==2.9.0.post0
